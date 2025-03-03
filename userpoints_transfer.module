@@ -1,0 +1,236 @@
+<?php
+
+/**
+ * Implements hook_permission().
+ */
+function userpoints_transfer_permission() {
+  return array(
+    'transfer userpoints' => array(
+      'title' => t('Transfer points to other users'),
+      'description' => t('Allows transferring points via a form in a block.'),
+    ),
+    'administer userpoints transfer' => array(
+      'title' => t('Administer Userpoints Transfer settings'),
+      'description' => t('Allows configuring transfer options for tokens.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function userpoints_transfer_menu() {
+  $items['admin/config/people/userpoints/transfer-settings'] = array(
+    'title' => 'Token Transfer Settings',
+    'description' => 'Configure the category and transaction type for transfers.',
+    'page callback' => 'backdrop_get_form',
+    'page arguments' => array('userpoints_transfer_settings_form'),
+    'access arguments' => array('administer userpoints transfer'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 11,
+  );
+  return $items;
+}
+
+/**
+ * Settings form for configuring transfer options.
+ */
+function userpoints_transfer_settings_form($form, &$form_state) {
+  $config = config('userpoints_transfer.settings');
+
+  $categories = userpoints_get_categories();
+  $form['transfer_category'] = array(
+    '#type' => 'select',
+    '#title' => t('Transfer Category'),
+    '#description' => t('Select the category under which transfers will be recorded.'),
+    '#options' => $categories,
+    '#default_value' => $config->get('transfer_category', 0),
+    '#required' => TRUE,
+  );
+
+  $txn_types = userpoints_transaction_get_types();
+  $type_options = array();
+  foreach ($txn_types as $name => $type) {
+    $type_options[$name] = $type->label;
+  }
+  $form['transfer_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Transaction Type'),
+    '#description' => t('Select the transaction type for transfers.'),
+    '#options' => $type_options,
+    '#default_value' => $config->get('transfer_type', 'userpoints'),
+    '#required' => TRUE,
+  );
+
+  $form = system_settings_form($form);
+  $form['#submit'][] = 'userpoints_transfer_settings_form_submit';
+  return $form;
+}
+
+/**
+ * Custom submit handler for debugging and explicit saving.
+ */
+function userpoints_transfer_settings_form_submit($form, &$form_state) {
+  $config = config('userpoints_transfer.settings');
+  $category = (int) $form_state['values']['transfer_category'];
+  $type = $form_state['values']['transfer_type'];
+
+  $config->set('transfer_category', $category);
+  $config->set('transfer_type', $type);
+  $config->save();
+
+  backdrop_set_message(t('Settings saved: Category = @category, Type = @type', array(
+    '@category' => $category,
+    '@type' => $type,
+  )));
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function userpoints_transfer_block_info() {
+  $blocks['transfer_points'] = array(
+    'info' => t('Points Transfer'),
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function userpoints_transfer_block_view($delta = '') {
+  $block = array();
+  if ($delta == 'transfer_points' && user_access('transfer userpoints')) {
+    $block['subject'] = t('Transfer Points'),
+    $block['content'] = backdrop_get_form('userpoints_transfer_form');
+  }
+  return $block;
+}
+
+/**
+ * Form for transferring points.
+ */
+function userpoints_transfer_form($form, &$form_state) {
+  $form['recipient'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Recipient'),
+    '#autocomplete_path' => 'user/autocomplete',
+    '#required' => TRUE,
+  );
+
+  $form['points'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Points Amount'),
+    '#required' => TRUE,
+    '#size' => 10,
+    '#default_value' => 10,
+  );
+
+  $form['message'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Personal Message'),
+    '#description' => t('Write an optional message for the recipient.'),
+    '#rows' => 2,
+    '#maxlength' => 255,
+    '#required' => FALSE,
+  );
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Transfer'),
+  );
+
+  return $form;
+}
+
+/**
+ * Form validation handler.
+ */
+function userpoints_transfer_form_validate($form, &$form_state) {
+  $recipient_name = $form_state['values']['recipient'];
+  $points = $form_state['values']['points'];
+  $current_user = $GLOBALS['user'];
+
+  if ($current_user->uid == 0) {
+    form_set_error('', t('You must be logged in to transfer points.'));
+    return;
+  }
+
+  $recipient = user_load_by_name($recipient_name);
+  if (!$recipient) {
+    form_set_error('recipient', t('The user does not exist.'));
+    return;
+  }
+
+  if ($recipient->uid == $current_user->uid) {
+    form_set_error('recipient', t('You cannot transfer points to yourself.'));
+    return;
+  }
+
+  if (!is_numeric($points) || $points < 10) {
+    form_set_error('points', t('The amount must be a number greater than or equal to 10.'));
+    return;
+  }
+
+  $current_points = function_exists('userpoints_get_current_points') ? userpoints_get_current_points($current_user->uid) : 0;
+  if ($current_points < $points) {
+    form_set_error('points', t('You do not have enough points. Your current points: @points.', array('@points' => $current_points)));
+  }
+
+  $form_state['recipient_uid'] = $recipient->uid;
+}
+
+/**
+ * Form submission handler.
+ */
+function userpoints_transfer_form_submit($form, &$form_state) {
+  $points = $form_state['values']['points'];
+  $recipient_uid = $form_state['recipient_uid'];
+  $current_user = $GLOBALS['user'];
+  $recipient_name = $form_state['values']['recipient'];
+  $message = !empty($form_state['values']['message']) ? $form_state['values']['message'] : '';
+
+  $config = config('userpoints_transfer.settings');
+  $category = (int) $config->get('transfer_category', 0);
+  $txn_type = $config->get('transfer_type', 'userpoints');
+
+  $categories = function_exists('userpoints_get_categories') ? userpoints_get_categories() : array(0 => t('Uncategorized'));
+  if (!isset($categories[$category])) {
+    $category = 0;
+  }
+
+  $txn_types = function_exists('userpoints_transaction_get_types') ? userpoints_transaction_get_types() : array('userpoints' => (object) array('label' => 'Default'));
+  if (!isset($txn_types[$txn_type])) {
+    $txn_type = 'userpoints';
+  }
+
+  $sender_description = t('Transfer to @user', array('@user' => $recipient_name));
+  if ($message) {
+    $sender_description .= ' - ' . check_plain($message);
+  }
+
+  $recipient_description = t('Received from @user', array('@user' => $current_user->name));
+  if ($message) {
+    $recipient_description .= ' - ' . check_plain($message);
+  }
+
+  if (function_exists('userpoints_grant_points')) {
+    $txn_emisor = userpoints_grant_points('transfer', -$points, $txn_type, $current_user->uid);
+    $txn_emisor->setDescription($sender_description)
+               ->setTid($category)
+               ->save();
+
+    $txn_receptor = userpoints_grant_points('transfer', $points, $txn_type, $recipient_uid);
+    $txn_receptor->setDescription($recipient_description)
+                 ->setTid($category)
+                 ->save();
+
+    backdrop_set_message(t('You have transferred @points points to @user.', array(
+      '@points' => $points,
+      '@user' => $recipient_name,
+    )));
+  } else {
+    backdrop_set_message(t('Error: Unable to process the transfer. Userpoints may be outdated.'), 'error');
+  }
+}
