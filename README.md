@@ -36,11 +36,11 @@ This module is licensed under the [GNU General Public License v2.0](LICENSE).
 ## Contributing
 Feel free to submit issues or pull requests on GitHub! Contributions are welcome.
 
-##Current Maintainers
+## Current Maintainers
 
 - [Alejandro faicán]( https://github.com/willow-fp )
   
-##Seeking additional maintainers.
+Seeking additional maintainers.
 
 ## Credits
 Developed by willow-fp
