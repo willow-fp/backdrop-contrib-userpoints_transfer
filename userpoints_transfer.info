@@ -2,5 +2,6 @@ name = Userpoints Transfer
 description = Allows authenticated users to transfer Userpoints to other users via a block.
 package = Custom
 backdrop = 1.x
+type = module
 dependencies[] = userpoints
 version = 1.0
